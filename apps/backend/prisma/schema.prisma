@@ -18,7 +18,7 @@ model User {
   avatarUrl     String?
   githubId      String?   @unique
   githubLogin   String?
-  accessToken   String?   // Encrypted GitHub access token
+  accessToken   String?   // Encrypted GitHub access token (legacy)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -30,6 +30,7 @@ model User {
   assignedGaps  KnowledgeGap[] @relation("GapAssignee")
   ownedRisks    ProjectRisk[] @relation("RiskOwner")
   approvedDocs  HandoverDocument[] @relation("DocumentApprover")
+  githubConnection GitHubConnection?
 
   @@map("users")
 }
@@ -90,24 +91,114 @@ model Project {
   @@map("projects")
 }
 
-model Repository {
+model GitHubConnection {
   id            String   @id @default(cuid())
-  name          String
-  fullName      String   @unique // owner/repo
-  url           String
-  cloneUrl      String
-  defaultBranch String   @default("main")
-  language      String?
-  description   String?
-  isPrivate     Boolean  @default(false)
-  projectId     String
+  userId        String   @unique
+  githubId      String   @unique
+  login         String
+  name          String?
+  email         String?
+  avatarUrl     String?
+  accessToken   String   // Encrypted GitHub access token
+  scope         String?
+  tokenType     String   @default("bearer")
+  connectedAt   DateTime @default(now())
+  disconnectedAt DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   // Relations
-  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositories  Repository[]
 
+  @@map("github_connections")
+}
+
+model Repository {
+  id                String   @id @default(cuid())
+  githubId          String   @unique // GitHub repository ID (numeric as string)
+  name              String
+  fullName          String   @unique // owner/repo
+  url               String
+  cloneUrl          String
+  defaultBranch     String   @default("main")
+  language          String?
+  description       String?
+  isPrivate         Boolean  @default(false)
+  isFork            Boolean  @default(false)
+  size              Int      @default(0) // Size in KB
+  stargazersCount   Int      @default(0)
+  forksCount        Int      @default(0)
+  openIssuesCount   Int      @default(0)
+  pushedAt          DateTime?
+  githubCreatedAt   DateTime
+  githubUpdatedAt   DateTime
+  projectId         String?
+  githubConnectionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  project           Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  githubConnection  GitHubConnection? @relation(fields: [githubConnectionId], references: [id], onDelete: SetNull)
+  files             RepositoryFile[]
+  ingestions        RepositoryIngestion[]
+
+  @@index([projectId])
+  @@index([githubConnectionId])
   @@map("repositories")
+}
+
+model RepositoryFile {
+  id              String   @id @default(cuid())
+  repositoryId    String
+  path            String
+  name            String
+  extension       String?
+  size            Int      @default(0) // Size in bytes
+  language        String?
+  content         String?  // File content (for smaller files)
+  contentHash     String?  // SHA hash of content
+  isBinary        Boolean  @default(false)
+  isGenerated     Boolean  @default(false)
+  isTest          Boolean  @default(false)
+  isConfig        Boolean  @default(false)
+  isDocumentation Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  repository      Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, path])
+  @@index([repositoryId, language])
+  @@index([repositoryId, isTest])
+  @@index([repositoryId, isConfig])
+  @@index([repositoryId, isDocumentation])
+  @@map("repository_files")
+}
+
+model RepositoryIngestion {
+  id              String   @id @default(cuid())
+  repositoryId    String
+  status          String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  totalFiles      Int      @default(0)
+  processedFiles  Int      @default(0)
+  totalSize       Int      @default(0) // Total size in bytes
+  processedSize   Int      @default(0) // Processed size in bytes
+  error           String?
+  errorDetails    String?  // JSON string for detailed error info
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  repository      Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([repositoryId, status])
+  @@index([repositoryId, createdAt])
+  @@map("repository_ingestions")
 }
 
 model ProjectAnalysis {

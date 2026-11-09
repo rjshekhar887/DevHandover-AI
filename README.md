@@ -93,12 +93,63 @@ devhandover-ai/
 | `npm run db:push` | Push schema changes to database |
 | `npm run db:studio` | Open Prisma Studio |
 
+## 🔐 GitHub OAuth Setup
+
+### Create a GitHub OAuth App
+
+1. Go to **GitHub Settings** → **Developer settings** → **OAuth Apps** → **New OAuth App**
+2. Fill in the application details:
+   - **Application name**: DevHandover AI (or your preferred name)
+   - **Homepage URL**: `http://localhost:3000` (or your production URL)
+   - **Authorization callback URL**: `http://localhost:3000/api/v1/github/callback`
+3. Click **Register application**
+4. Copy the **Client ID** and generate a **Client Secret**
+
+### Configure Environment Variables
+
+Add the following to your `.env` file:
+
+```env
+GITHUB_CLIENT_ID=your_client_id_here
+GITHUB_CLIENT_SECRET=your_client_secret_here
+GITHUB_CALLBACK_URL=http://localhost:3000/api/v1/github/callback
+```
+
+### OAuth Flow
+
+1. Frontend calls `GET /api/v1/github/auth` to get the GitHub authorization URL
+2. User is redirected to GitHub to authorize the application
+3. GitHub redirects back to `/api/v1/github/callback` with an authorization code
+4. Backend exchanges the code for an access token
+5. User's GitHub profile is fetched and stored
+6. Frontend receives a redirect with success status
+
 ## 🔌 API Endpoints
 
 ### Health Checks
 - `GET /health` - Comprehensive health check
 - `GET /ready` - Kubernetes readiness probe
 - `GET /live` - Kubernetes liveness probe
+
+### GitHub Integration
+
+#### Authentication
+- `GET /api/v1/github/auth` - Initiate GitHub OAuth flow (returns auth URL)
+- `GET /api/v1/github/callback` - Handle GitHub OAuth callback
+- `GET /api/v1/github/connection` - Get current GitHub connection status
+- `DELETE /api/v1/github/connection` - Disconnect GitHub account
+
+#### Repositories
+- `GET /api/v1/github/repositories` - List authenticated user's repositories
+  - Query params: `page`, `perPage`, `sort`, `direction`, `type`
+- `GET /api/v1/github/repositories/:owner/:repo` - Get repository details
+- `GET /api/v1/github/repositories/:owner/:repo/contents/*path` - Get file content
+
+#### Ingestion
+- `POST /api/v1/github/repositories/:owner/:repo/ingest` - Start repository ingestion
+  - Body: `{ branch?: string, projectId?: string }`
+- `GET /api/v1/github/ingestions/:ingestionId` - Get ingestion status
+- `GET /api/v1/github/ingestions/:ingestionId/files` - Get ingested files (with filters)
 
 ### Projects
 - `GET /api/v1/projects` - List projects (with pagination)
@@ -114,9 +165,12 @@ See [API Documentation](docs/API.md) for full details.
 The platform uses the following core models:
 
 - **User** - Platform users (GitHub OAuth)
+- **GitHubConnection** - GitHub OAuth connection with encrypted access token
 - **Workspace** - Team/organization workspaces
 - **Project** - Software projects being handed over
 - **Repository** - GitHub repositories linked to projects
+- **RepositoryFile** - Ingested repository files with metadata
+- **RepositoryIngestion** - Ingestion job tracking (status, progress, errors)
 - **ProjectAnalysis** - AI-generated project analysis results
 - **KnowledgeGap** - Identified knowledge gaps
 - **ProjectRisk** - Project risks and mitigation strategies
@@ -134,21 +188,41 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for details.
 | `NODE_ENV` | No | Environment (development/production/test) |
 | `PORT` | No | Server port (default: 3000) |
 | `DATABASE_URL` | Yes | Database connection string |
-| `CORS_ORIGIN` | No | CORS allowed origin |
+| `CORS_ORIGIN` | No | CORS allowed origin (default: http://localhost:5173) |
 | `GITHUB_CLIENT_ID` | No | GitHub OAuth client ID |
 | `GITHUB_CLIENT_SECRET` | No | GitHub OAuth client secret |
+| `GITHUB_CALLBACK_URL` | No | GitHub OAuth callback URL |
 | `LLM_PROVIDER` | No | LLM provider (openai/nim/custom) |
 | `LLM_API_KEY` | Yes* | LLM API key (*required if using AI features) |
 | `LLM_BASE_URL` | No | Custom LLM endpoint URL |
-| `LLM_MODEL` | No | LLM model to use |
+| `LLM_MODEL` | No | LLM model to use (default: gpt-4o) |
 | `JWT_SECRET` | No | JWT signing secret |
-| `LOG_LEVEL` | No | Logging level |
+| `LOG_LEVEL` | No | Logging level (default: info) |
 
 ## 📖 Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) - System architecture and design decisions
 - [API Reference](docs/API.md) - Complete API documentation
 - [Progress Tracking](PROGRESS.md) - Development progress and milestones
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+npm run test
+
+# Run specific test file
+npx vitest run src/services/ingestionService.test.ts
+```
+
+### Test Coverage
+- OAuth state generation and validation
+- GitHub OAuth URL building
+- Token encryption/decryption
+- File filtering (exclusions, text detection)
+- File categorization (test, config, docs, generated)
+- Language detection from file extensions
+- Binary content detection
 
 ## 🤝 Contributing
 

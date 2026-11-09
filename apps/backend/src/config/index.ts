@@ -22,6 +22,7 @@ const envSchema = z.object({
   // GitHub
   GITHUB_CLIENT_ID: z.string().optional(),
   GITHUB_CLIENT_SECRET: z.string().optional(),
+  GITHUB_CALLBACK_URL: z.string().url().optional(),
 
   // LLM Provider
   LLM_PROVIDER: z.enum(['openai', 'nim', 'custom']).default('openai'),

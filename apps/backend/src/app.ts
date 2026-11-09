@@ -12,6 +12,7 @@ import { logger, logHttp } from './utils/logger';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import healthRoutes from './routes/healthRoutes';
 import projectRoutes from './routes/projectRoutes';
+import githubRoutes from './routes/githubRoutes';
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use('/', healthRoutes);
 
 // API routes
 app.use(`${apiPrefix}/projects`, projectRoutes);
+app.use(`${apiPrefix}/github`, githubRoutes);
 
 // Root endpoint
 app.get('/', (_req, res) => {

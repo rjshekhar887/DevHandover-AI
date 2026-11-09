@@ -41,6 +41,8 @@ src/
 ├── config/          # Centralized configuration (Zod-validated)
 ├── controllers/     # Request handlers (thin, delegate to services)
 ├── services/        # Business logic (reusable, testable)
+│   ├── githubService.ts      # GitHub OAuth & API interactions
+│   └── ingestionService.ts   # Repository ingestion & file processing
 ├── routes/          # Route definitions with middleware
 ├── middleware/      # Cross-cutting concerns (auth, validation, errors)
 ├── validators/      # Zod schemas for request validation
@@ -48,6 +50,35 @@ src/
 ├── utils/           # Shared utilities (logger, errors, helpers)
 └── index.ts         # Application entry point
 ```
+
+### GitHub Integration Architecture
+
+The GitHub integration follows a service-oriented design:
+
+1. **githubService.ts** - Handles all GitHub API interactions:
+   - OAuth state generation and validation (CSRF protection)
+   - Authorization code exchange for access tokens
+   - User profile and email fetching
+   - Repository listing with pagination
+   - Repository tree and file content fetching
+   - Secure token storage (encrypted)
+
+2. **ingestionService.ts** - Handles repository ingestion:
+   - Repository tree traversal with recursive fetching
+   - Intelligent file filtering (excludes node_modules, dist, build, .git, lock files, binary files)
+   - File categorization (test, config, documentation, generated)
+   - Language detection from file extensions
+   - Binary content detection
+   - Configurable limits (file count, file size, total size)
+   - Progress tracking with status updates
+   - Framework/dependency detection from config files
+
+3. **Security Considerations**:
+   - OAuth state parameter with 10-minute expiry
+   - Access tokens encrypted before database storage (base64 encoding - production should use AES-256-GCM)
+   - Tokens never exposed to frontend
+   - Rate limit handling with retry logic
+   - Input validation on all GitHub API parameters
 
 ### Design Principles
 
@@ -107,13 +138,13 @@ HTTP Request
 User ◄──────► WorkspaceMember ◄──────► Workspace
   │                                          │
   │                                          ▼
-  │                                    Project ◄──────► Repository
-  │                                          │
-  │              ┌───────────────────────────┼───────────────────────────┐
-  │              ▼                           ▼                           ▼
-  │        ProjectAnalysis              KnowledgeGap                  ProjectRisk
-  │              │                           │                           │
-  │              ▼                           ▼                           ▼
+  │                                    Project ◄──────► Repository ◄──────► RepositoryFile
+  │                                          │                    │
+  │              ┌───────────────────────────┼────────────────────┼───────────────────────┐
+  │              ▼                           ▼                    ▼                       ▼
+  │        ProjectAnalysis              KnowledgeGap            ProjectRisk         RepositoryIngestion
+  │              │                           │                    │
+  │              ▼                           ▼                    ▼
   │        Interview ◄──────► InterviewQuestion                         │
   │              │                                                    │
   │              ▼                                                    │
@@ -122,14 +153,28 @@ User ◄──────► WorkspaceMember ◄──────► Workspace
   └──────────────────────────────────────────────────────────────────┘
 ```
 
+### GitHub Integration Models
+
+| Model | Purpose | Key Fields |
+|-------|---------|------------|
+| `GitHubConnection` | GitHub OAuth connection | userId, githubId, login, accessToken (encrypted), scope, connectedAt |
+| `Repository` | GitHub repository metadata | githubId, fullName, url, cloneUrl, defaultBranch, language, isPrivate, githubConnectionId |
+| `RepositoryFile` | Ingested file metadata | repositoryId, path, name, extension, size, language, content, contentHash, isBinary, isTest, isConfig, isDocumentation |
+| `RepositoryIngestion` | Ingestion job tracking | repositoryId, status (PENDING/PROCESSING/COMPLETED/FAILED), totalFiles, processedFiles, totalSize, processedSize, error, startedAt, completedAt |
+
+### Key Models
+
 ### Key Models
 
 | Model | Purpose | Key Fields |
 |-------|---------|------------|
-| `User` | Platform users | email, githubId, accessToken |
+| `User` | Platform users | email, githubId, githubLogin, accessToken (legacy) |
+| `GitHubConnection` | GitHub OAuth connection | userId, githubId, login, accessToken (encrypted), scope, connectedAt |
 | `Workspace` | Team/organization | name, description |
 | `Project` | Software project | name, status, repositoryUrl, ownerId |
-| `Repository` | GitHub repository | fullName, cloneUrl, projectId |
+| `Repository` | GitHub repository | githubId, fullName, url, cloneUrl, defaultBranch, language, isPrivate, projectId, githubConnectionId |
+| `RepositoryFile` | Ingested file metadata | repositoryId, path, name, extension, size, language, content, contentHash, isBinary, isTest, isConfig, isDocumentation |
+| `RepositoryIngestion` | Ingestion job tracking | repositoryId, status, totalFiles, processedFiles, totalSize, processedSize, error, startedAt, completedAt |
 | `ProjectAnalysis` | AI analysis results | architecture, modules, dependencies, status |
 | `KnowledgeGap` | Identified gaps | title, category, severity, status |
 | `ProjectRisk` | Project risks | title, category, likelihood, impact, mitigation |

@@ -432,7 +432,343 @@ API version is in the URL path: `/api/v1/`
 
 Breaking changes will result in a new version (`/api/v2/`).
 
+## GitHub Integration Endpoints
+
+### Authentication
+
+#### GET /api/v1/github/auth
+
+Initiate GitHub OAuth flow.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `redirectUri` | string | No | Frontend redirect URL after OAuth completion |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "authUrl": "https://github.com/login/oauth/authorize?client_id=...",
+    "state": "cryptographically-secure-random-state"
+  }
+}
+```
+
+#### GET /api/v1/github/callback
+
+Handle GitHub OAuth callback. This endpoint is called by GitHub after user authorization.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `code` | string | Yes | Authorization code from GitHub |
+| `state` | string | Yes | OAuth state parameter for CSRF protection |
+| `error` | string | No | Error code if user denied authorization |
+| `error_description` | string | No | Human-readable error description |
+
+**Response**: Redirects to frontend with success or error parameters.
+
+#### GET /api/v1/github/connection
+
+Get current GitHub connection status.
+
+**Response (200 - Connected)**
+```json
+{
+  "success": true,
+  "data": {
+    "connected": true,
+    "githubId": "12345678",
+    "login": "octocat",
+    "name": "The Octocat",
+    "email": "octocat@github.com",
+    "avatarUrl": "https://avatars.githubusercontent.com/u/12345678?v=4",
+    "scope": "repo read:user user:email",
+    "connectedAt": "2026-11-09T12:00:00.000Z"
+  }
+}
+```
+
+**Response (200 - Not Connected)**
+```json
+{
+  "success": true,
+  "data": {
+    "connected": false
+  }
+}
+```
+
+#### DELETE /api/v1/github/connection
+
+Disconnect GitHub account.
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "message": "GitHub account disconnected successfully"
+}
+```
+
+### Repositories
+
+#### GET /api/v1/github/repositories
+
+List repositories accessible to the authenticated user.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `page` | integer | No | 1 | Page number (min: 1) |
+| `perPage` | integer | No | 30 | Items per page (max: 100) |
+| `sort` | string | No | `updated` | Sort field: `created`, `updated`, `pushed`, `full_name` |
+| `direction` | string | No | `desc` | Sort direction: `asc`, `desc` |
+| `type` | string | No | `owner` | Repository type: `all`, `owner`, `public`, `private`, `member` |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "123456789",
+      "name": "hello-world",
+      "fullName": "octocat/hello-world",
+      "url": "https://github.com/octocat/hello-world",
+      "cloneUrl": "https://github.com/octocat/hello-world.git",
+      "defaultBranch": "main",
+      "language": "TypeScript",
+      "description": "My first repository",
+      "isPrivate": false,
+      "isFork": false,
+      "size": 1024,
+      "stargazersCount": 42,
+      "forksCount": 5,
+      "openIssuesCount": 3,
+      "pushedAt": "2026-11-09T10:00:00.000Z",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-11-09T10:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "perPage": 30,
+    "hasNextPage": true
+  }
+}
+```
+
+#### GET /api/v1/github/repositories/:owner/:repo
+
+Get repository details.
+
+**Path Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `owner` | string | Yes | Repository owner (user or organization) |
+| `repo` | string | Yes | Repository name |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "clx123repo",
+    "githubId": "123456789",
+    "name": "hello-world",
+    "fullName": "octocat/hello-world",
+    "url": "https://github.com/octocat/hello-world",
+    "cloneUrl": "https://github.com/octocat/hello-world.git",
+    "defaultBranch": "main",
+    "language": "TypeScript",
+    "description": "My first repository",
+    "isPrivate": false,
+    "isFork": false,
+    "size": 1024,
+    "stargazersCount": 42,
+    "forksCount": 5,
+    "openIssuesCount": 3,
+    "pushedAt": "2026-11-09T10:00:00.000Z",
+    "githubCreatedAt": "2026-01-01T00:00:00.000Z",
+    "githubUpdatedAt": "2026-11-09T10:00:00.000Z",
+    "createdAt": "2026-11-09T12:00:00.000Z",
+    "updatedAt": "2026-11-09T12:00:00.000Z"
+  }
+}
+```
+
+#### GET /api/v1/github/repositories/:owner/:repo/contents/*path
+
+Get file content from repository.
+
+**Path Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `path` | string | Yes | File path within repository |
+
+**Query Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `branch` | string | No | `main` | Branch or tag name |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "path": "src/index.ts",
+    "name": "index.ts",
+    "size": 512,
+    "sha": "abc123...",
+    "content": "export const hello = () => 'world';",
+    "encoding": "base64"
+  }
+}
+```
+
+### Repository Ingestion
+
+#### POST /api/v1/github/repositories/:owner/:repo/ingest
+
+Start repository ingestion.
+
+**Path Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+
+**Request Body**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `branch` | string | No | Branch to ingest (default: repository default branch) |
+| `projectId` | string | No | Project ID to link the repository to |
+
+**Response (202)**
+```json
+{
+  "success": true,
+  "data": {
+    "ingestionId": "clx123ingestion",
+    "repositoryId": "clx123repo",
+    "status": "PROCESSING",
+    "message": "Repository ingestion started"
+  }
+}
+```
+
+#### GET /api/v1/github/ingestions/:ingestionId
+
+Get ingestion status.
+
+**Path Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ingestionId` | string | Yes | Ingestion ID (CUID) |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "clx123ingestion",
+    "repositoryId": "clx123repo",
+    "status": "COMPLETED",
+    "totalFiles": 150,
+    "processedFiles": 150,
+    "totalSize": 1048576,
+    "processedSize": 1048576,
+    "error": null,
+    "errorDetails": null,
+    "startedAt": "2026-11-09T12:00:00.000Z",
+    "completedAt": "2026-11-09T12:05:00.000Z",
+    "createdAt": "2026-11-09T12:00:00.000Z",
+    "updatedAt": "2026-11-09T12:05:00.000Z"
+  }
+}
+```
+
+**Ingestion Status Values**
+- `PENDING` - Ingestion queued
+- `PROCESSING` - Currently fetching and processing files
+- `COMPLETED` - All files processed successfully
+- `FAILED` - Ingestion failed (check `error` and `errorDetails`)
+
+#### GET /api/v1/github/ingestions/:ingestionId/files
+
+Get ingested files with filtering and pagination.
+
+**Path Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ingestionId` | string | Yes | Ingestion ID (CUID) |
+
+**Query Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `page` | integer | No | 1 | Page number |
+| `limit` | integer | No | 50 | Items per page (max: 100) |
+| `language` | string | No | - | Filter by programming language |
+| `isTest` | boolean | No | - | Filter test files |
+| `isConfig` | boolean | No | - | Filter config files |
+| `isDocumentation` | boolean | No | - | Filter documentation files |
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "clx123file",
+      "path": "src/index.ts",
+      "name": "index.ts",
+      "extension": "ts",
+      "size": 512,
+      "language": "TypeScript",
+      "content": "export const hello = () => 'world';",
+      "contentHash": "abc123...",
+      "isBinary": false,
+      "isGenerated": false,
+      "isTest": false,
+      "isConfig": false,
+      "isDocumentation": false,
+      "createdAt": "2026-11-09T12:00:00.000Z",
+      "updatedAt": "2026-11-09T12:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 150,
+    "totalPages": 3
+  }
+}
+```
+
 ## Changelog
+
+### v1.1.0 (2026-11-09)
+- GitHub OAuth authentication
+- Repository discovery and listing
+- Repository ingestion with file filtering
+- Ingestion status tracking
+- File content retrieval
 
 ### v1.0.0 (2026-11-09)
 - Initial API release
