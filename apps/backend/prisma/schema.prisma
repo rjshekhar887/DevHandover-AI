@@ -1,0 +1,248 @@
+// Prisma Schema for DevHandover AI
+// Database models for the project handover platform
+// SQLite-compatible: uses String for JSON, enums, and arrays
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./devhandover.db"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  avatarUrl     String?
+  githubId      String?   @unique
+  githubLogin   String?
+  accessToken   String?   // Encrypted GitHub access token
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  workspaces    WorkspaceMember[]
+  projects      Project[] @relation("ProjectOwner")
+  interviews    Interview[] @relation("InterviewInterviewee")
+  documents     HandoverDocument[] @relation("DocumentAuthor")
+  assignedGaps  KnowledgeGap[] @relation("GapAssignee")
+  ownedRisks    ProjectRisk[] @relation("RiskOwner")
+  approvedDocs  HandoverDocument[] @relation("DocumentApprover")
+
+  @@map("users")
+}
+
+model Workspace {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  members     WorkspaceMember[]
+  projects    Project[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id        String   @id @default(cuid())
+  role      String   @default("MEMBER") // OWNER, ADMIN, MEMBER, VIEWER
+  userId    String
+  workspaceId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@map("workspace_members")
+}
+
+model Project {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  status          String   @default("ACTIVE") // ACTIVE, ARCHIVED, ON_HOLD, COMPLETED
+  repositoryUrl   String?
+  repositoryId    String?  // GitHub repository ID
+  defaultBranch   String   @default("main")
+  language        String?
+  framework       String?
+  ownerId         String
+  workspaceId     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  owner           User     @relation("ProjectOwner", fields: [ownerId], references: [id])
+  workspace       Workspace? @relation(fields: [workspaceId], references: [id])
+  repositories    Repository[]
+  analyses        ProjectAnalysis[]
+  knowledgeGaps   KnowledgeGap[]
+  risks           ProjectRisk[]
+  interviews      Interview[]
+  documents       HandoverDocument[]
+
+  @@map("projects")
+}
+
+model Repository {
+  id            String   @id @default(cuid())
+  name          String
+  fullName      String   @unique // owner/repo
+  url           String
+  cloneUrl      String
+  defaultBranch String   @default("main")
+  language      String?
+  description   String?
+  isPrivate     Boolean  @default(false)
+  projectId     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("repositories")
+}
+
+model ProjectAnalysis {
+  id              String   @id @default(cuid())
+  projectId       String
+  status          String   @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED
+  summary         String?
+  architecture    String?  // JSON string - Architecture analysis result
+  modules         String?  // JSON string - Module breakdown
+  dependencies    String?  // JSON string - Dependency graph
+  contributors    String?  // JSON string - Contributor analysis
+  techDecisions   String?  // JSON string - Technical decisions
+  startedAt       DateTime?
+  completedAt     DateTime?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_analyses")
+}
+
+model KnowledgeGap {
+  id          String   @id @default(cuid())
+  projectId   String
+  title       String
+  description String
+  category    String   // ARCHITECTURE, DOCUMENTATION, TESTING, DEPLOYMENT, SECURITY, PERFORMANCE, BUSINESS_LOGIC, INTEGRATION, OTHER
+  severity    String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  module      String?  // Related module/component
+  filePaths   String?  // JSON string array - Related file paths
+  status      String   @default("IDENTIFIED") // IDENTIFIED, IN_PROGRESS, RESOLVED, WONT_FIX
+  assigneeId  String?  // User responsible for filling gap
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee    User?    @relation("GapAssignee", fields: [assigneeId], references: [id])
+
+  @@map("knowledge_gaps")
+}
+
+model ProjectRisk {
+  id          String   @id @default(cuid())
+  projectId   String
+  title       String
+  description String
+  category    String   // TECHNICAL_DEBT, KEY_PERSON, KNOWLEDGE_LOSS, DEPENDENCY, SECURITY, SCALABILITY, MAINTENANCE, COMPLIANCE, OTHER
+  likelihood  String   @default("MEDIUM") // LOW, MEDIUM, HIGH, VERY_HIGH
+  impact      String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  mitigation  String?
+  status      String   @default("IDENTIFIED") // IDENTIFIED, ASSESSING, MITIGATING, MONITORING, RESOLVED, ACCEPTED
+  ownerId     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  owner       User?    @relation("RiskOwner", fields: [ownerId], references: [id])
+
+  @@map("project_risks")
+}
+
+model Interview {
+  id            String   @id @default(cuid())
+  projectId     String
+  intervieweeId String
+  interviewerId String?  // AI or human interviewer
+  status        String   @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, CANCELLED, FAILED
+  type          String   @default("KNOWLEDGE_TRANSFER") // KNOWLEDGE_TRANSFER, ARCHITECTURE_WALKTHROUGH, CODE_REVIEW, ONBOARDING, EXIT_INTERVIEW
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  summary       String?
+  transcript    String?  // JSON string - Full conversation transcript
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  interviewee   User     @relation("InterviewInterviewee", fields: [intervieweeId], references: [id])
+  questions     InterviewQuestion[]
+
+  @@map("interviews")
+}
+
+model InterviewQuestion {
+  id          String   @id @default(cuid())
+  interviewId String
+  question    String
+  answer      String?
+  category    String   // ARCHITECTURE, MODULES, DEPENDENCIES, DEPLOYMENT, TESTING, SECURITY, BUSINESS_LOGIC, TEAM_PROCESS, TRIBAL_KNOWLEDGE, GOTCHAS, OTHER
+  order       Int
+  isAnswered  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@map("interview_questions")
+}
+
+model HandoverDocument {
+  id          String   @id @default(cuid())
+  projectId   String
+  authorId    String
+  title       String
+  version     String   @default("1.0.0")
+  status      String   @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, PUBLISHED, ARCHIVED
+  content     String   // JSON string - Structured document content
+  markdown    String?  // Rendered markdown
+  generatedBy String   @default("MANUAL") // MANUAL, AI_ASSISTED, AI_GENERATED
+  approvedBy  String?
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author      User     @relation("DocumentAuthor", fields: [authorId], references: [id])
+  approver    User?    @relation("DocumentApprover", fields: [approvedBy], references: [id])
+  evidence    Evidence[]
+
+  @@map("handover_documents")
+}
+
+model Evidence {
+  id              String   @id @default(cuid())
+  documentId      String
+  type            String   // SOURCE_CODE, COMMIT, PULL_REQUEST, ISSUE, DOCUMENTATION, INTERVIEW, CONFIG_FILE, TEST_FILE, DEPLOYMENT_LOG, OTHER
+  source          String   // File path, commit hash, PR number, interview ID, etc.
+  reference       String   // Specific reference (line numbers, quote, timestamp)
+  description     String
+  confidence      Float    @default(1.0) // 0.0 - 1.0
+  createdAt       DateTime @default(now())
+
+  document        HandoverDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("evidence")
+}
