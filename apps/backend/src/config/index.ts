@@ -4,6 +4,8 @@
  */
 
 import { z } from 'zod';
+import { parseTokenEncryptionConfig } from '../services/tokenEncryption';
+import type { TokenEncryptionConfig } from '../services/tokenEncryption';
 
 // Environment schema with validation
 const envSchema = z.object({
@@ -19,10 +21,16 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   CORS_CREDENTIALS: z.coerce.boolean().default(true),
 
+  // Demo Mode - allows app to work without GitHub OAuth or LLM
+  DEMO_MODE: z.coerce.boolean().default(false),
+  DEMO_USER_EMAIL: z.string().email().default('demo@devhandover.ai'),
+
   // GitHub
   GITHUB_CLIENT_ID: z.string().optional(),
   GITHUB_CLIENT_SECRET: z.string().optional(),
   GITHUB_CALLBACK_URL: z.string().url().optional(),
+  GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: z.string().optional(),
+  GITHUB_TOKEN_ENCRYPTION_KEYS: z.string().optional(),
 
   // LLM Provider
   LLM_PROVIDER: z.enum(['openai', 'nim', 'custom']).default('openai'),
@@ -46,7 +54,28 @@ if (!parsedEnv.success) {
   process.exit(1);
 }
 
-export const config = parsedEnv.data;
+const {
+  GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID,
+  GITHUB_TOKEN_ENCRYPTION_KEYS,
+  ...parsedConfig
+} = parsedEnv.data;
+
+let tokenEncryptionConfig: TokenEncryptionConfig | undefined;
+try {
+  tokenEncryptionConfig = parseTokenEncryptionConfig({
+    nodeEnv: parsedConfig.NODE_ENV,
+    activeKeyId: GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID,
+    keysJson: GITHUB_TOKEN_ENCRYPTION_KEYS,
+  });
+} catch {
+  console.error('Invalid GitHub token encryption configuration. Check the key IDs and 32-byte Base64 key values.');
+  process.exit(1);
+}
+
+export const config = {
+  ...parsedConfig,
+  TOKEN_ENCRYPTION: tokenEncryptionConfig,
+};
 
 export type Config = typeof config;
 
@@ -54,3 +83,4 @@ export type Config = typeof config;
 export const isProduction = config.NODE_ENV === 'production';
 export const isDevelopment = config.NODE_ENV === 'development';
 export const isTest = config.NODE_ENV === 'test';
+export const isDemoMode = config.DEMO_MODE;

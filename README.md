@@ -30,7 +30,7 @@ DevHandover AI solves the problem of critical project knowledge disappearing whe
 devhandover-ai/
 ├── apps/
 │   ├── backend/          # Express.js API server
-│   └── frontend/         # React frontend (scaffold)
+│   └── frontend/         # React frontend
 ├── packages/
 │   └── shared/           # Shared TypeScript types & utilities
 ├── docs/                 # Documentation
@@ -77,8 +77,8 @@ devhandover-ai/
    # Terminal 1 - Backend
    npm run dev:backend
 
-   # Terminal 2 - Frontend (when implemented)
-   # npm run dev --workspace=apps/frontend
+   # Terminal 2 - Frontend
+   npm run dev --workspace=apps/frontend
    ```
 
 ### Available Scripts
@@ -117,9 +117,9 @@ GITHUB_CALLBACK_URL=http://localhost:3000/api/v1/github/callback
 
 ### OAuth Flow
 
-1. Frontend calls `GET /api/v1/github/auth` to get the GitHub authorization URL
+1. Authenticated frontend calls `GET /api/v1/github/auth` to get the GitHub authorization URL; the response sets a short-lived HttpOnly browser-binding cookie
 2. User is redirected to GitHub to authorize the application
-3. GitHub redirects back to `/api/v1/github/callback` with an authorization code
+3. GitHub redirects back to `/api/v1/github/callback`; the backend validates the one-time OAuth state and the same browser's binding cookie
 4. Backend exchanges the code for an access token
 5. User's GitHub profile is fetched and stored
 6. Frontend receives a redirect with success status
@@ -198,6 +198,94 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for details.
 | `LLM_MODEL` | No | LLM model to use (default: gpt-4o) |
 | `JWT_SECRET` | No | JWT signing secret |
 | `LOG_LEVEL` | No | Logging level (default: info) |
+
+### Docker Compose
+
+The Compose stack runs the backend in production mode and requires
+`JWT_SECRET`, `GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID`, and
+`GITHUB_TOKEN_ENCRYPTION_KEYS` in the process environment or an untracked root
+`.env` file. Generate the JWT and encryption secrets independently; never use
+the JWT signing secret as an encryption key. Once configured, start the stack
+with `docker compose up --build`.
+
+### GitHub token encryption key
+
+Production startup requires `GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID` and
+`GITHUB_TOKEN_ENCRYPTION_KEYS`. Generate a 32-byte key with
+`openssl rand -base64 32`, then provide the result through your deployment's
+secret manager. Configure the key map as JSON, for example:
+
+```text
+GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID=key-2026-01
+GITHUB_TOKEN_ENCRYPTION_KEYS={"key-2026-01":"<base64-encoded-32-byte-key>"}
+```
+
+The value shown is a placeholder, not a usable key. Keep this dedicated key
+separate from `JWT_SECRET`. Development and test environments do not generate
+or assume a default encryption key; GitHub connection writes fail closed if
+the keys are not configured. Key IDs must be 1–32 characters from
+`A-Z`, `a-z`, `0-9`, `_`, or `-`; the active ID must appear in the key map.
+
+GitHub token persistence uses `gh-token:v2` envelopes. Its authenticated
+context is a deterministic JSON tuple of entity/table name, stable owning user
+ID, and token field name. Existing database records must be migrated before
+deploying this strict encrypted read path; adding the tool does not migrate
+records, and the tool has not been run as part of this phase.
+Drain old application instances before encrypted records are written, and
+provision the encryption keys before startup. Rolling back to a Base64-only
+application after encrypted writes is unsafe because it cannot read the new
+envelopes.
+
+### GitHub token migration tooling (operator-run; not executed here)
+
+The application-level migration tool defaults to a read-only dry run. From
+`apps/backend`, an operator may run:
+
+```text
+npm run tokens:migrate -- --dry-run
+```
+
+The command reads token columns and prints counts by entity, field, and
+classification only. It never prints token values, ciphertext, decrypted
+values, or encryption keys. Legacy values are reported as `AMBIGUOUS` unless
+an operator supplies provenance; no format is guessed from the value itself.
+
+Execution is intentionally separate and requires an explicit legacy format,
+a provenance reference, configured encryption keys, and a new absolute
+`.jsonl` quarantine report path in an existing access-controlled directory.
+The reference is operator-supplied evidence; the tool does not authenticate
+it or verify that it supports the selected format. Trustworthy evidence should
+identify an independently reviewable source such as a deployment/build record,
+versioned export specification, or verified data-generation process. Before
+execution, the operator must confirm that the documented format applies to
+the entire selected migration cohort. A non-empty reference alone does not
+establish authenticity or cohort-wide correctness; insufficient evidence
+requires dry-run classification as `AMBIGUOUS` and must not be overridden.
+
+The quarantine report contains only record IDs, entity, field, reason code,
+timestamp, and run ID. It is staged and flushed in the destination directory,
+then published atomically without replacing an earlier report. Temporary
+recovery data is retained and its location is reported if publication fails.
+Execution summaries distinguish planning counts from final migrated, skipped,
+failed, and quarantined outcomes. A transaction/CAS or report-persistence
+failure exits non-zero; that run must not be considered complete. Do not
+execute migration until the dry-run classifications and provenance have been
+independently reviewed and approved.
+
+Before any migration:
+
+1. Make a mandatory encrypted database backup and test restoring it to an
+   isolated environment. Restrict access to both backup and restore.
+2. Back up the encryption keys independently and test recovery. Retain every
+   old key ID needed to decrypt existing envelopes during key rotation.
+3. Drain old application instances before any encrypted record is written.
+   Never roll back to a Base64-only binary after encrypted writes begin.
+4. Review quarantine metadata without attempting to recover tokens from logs
+   or reports. Correct provenance and rerun only when verified; otherwise
+   preserve the original database value and recover by having the user
+   reconnect GitHub through OAuth.
+5. Keep production cutover blocked until dry-run results, backup restoration,
+   key recovery, and a compatible rollback plan are approved.
 
 ## 📖 Documentation
 

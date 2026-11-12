@@ -8,10 +8,13 @@ import {
   listProjects,
   createProject,
   getProject,
+  startProjectAnalysis,
   updateProject,
   deleteProject,
 } from '../controllers/projectController';
 import { validate } from '../middleware/validation';
+import { requireAuth } from '../middleware/auth';
+import { analyzeProjectSchema } from '../validators/analysisValidator';
 import {
   createProjectSchema,
   updateProjectSchema,
@@ -21,10 +24,12 @@ import {
 
 const router = Router();
 
+router.use(requireAuth);
+
 /**
  * @route GET /api/v1/projects
  * @description List all projects with pagination and filtering
- * @access Private (will be protected by auth middleware)
+ * @access Private
  */
 router.get(
   '/',
@@ -52,6 +57,17 @@ router.get(
   '/:id',
   validate(projectIdParamSchema),
   getProject
+);
+
+/**
+ * @route POST /api/v1/projects/:id/analyze
+ * @description Create evidence-grounded analysis from completed repository ingestion
+ * @access Private
+ */
+router.post(
+  '/:id/analyze',
+  validate(analyzeProjectSchema),
+  startProjectAnalysis
 );
 
 /**

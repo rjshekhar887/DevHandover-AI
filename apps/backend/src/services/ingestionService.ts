@@ -3,10 +3,45 @@
  * Handles fetching, processing, and storing repository files
  */
 
+import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { logger } from '../utils/logger';
 import { fetchRepositoryTree, fetchFileContent, GitHubTreeItem, GitHubFileContent } from './githubService';
-import { BadRequestError, ServiceUnavailableError } from '../utils/errors';
+import { BadRequestError, NotFoundError, ServiceUnavailableError } from '../utils/errors';
+import { projectAccessWhere } from './projectAuthorization';
+
+type IngestionClient = PrismaClient | Prisma.TransactionClient;
+
+const authorizedRepositoryWhere = (userId: string): Prisma.RepositoryWhereInput => ({
+  OR: [
+    {
+      project: {
+        is: projectAccessWhere(userId, ['OWNER', 'MEMBER', 'VIEWER']),
+      },
+    },
+    {
+      projectId: null,
+      githubConnection: {
+        is: { userId },
+      },
+    },
+  ],
+});
+
+async function findAuthorizedIngestion(
+  ingestionId: string,
+  userId: string,
+  db: IngestionClient
+) {
+  return db.repositoryIngestion.findFirst({
+    where: {
+      id: ingestionId,
+      repository: {
+        is: authorizedRepositoryWhere(userId),
+      },
+    },
+  });
+}
 
 // Configuration constants
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB per file
@@ -190,10 +225,10 @@ export function categorizeFile(path: string, content?: string): { isTest: boolea
 
   // Generated files (heuristics)
   const isGenerated =
-    lowerPath.includes('/dist/') ||
-    lowerPath.includes('/build/') ||
-    lowerPath.includes('/generated/') ||
-    lowerPath.includes('/.generated/') ||
+    lowerPath.includes('/dist/') || lowerPath.startsWith('dist/') ||
+    lowerPath.includes('/build/') || lowerPath.startsWith('build/') ||
+    lowerPath.includes('/generated/') || lowerPath.startsWith('generated/') ||
+    lowerPath.includes('/.generated/') || lowerPath.startsWith('.generated/') ||
     fileName.endsWith('.min.js') ||
     fileName.endsWith('.min.css') ||
     fileName.endsWith('.map') ||
@@ -412,17 +447,16 @@ async function processIngestion(
 /**
  * Get ingestion status
  */
-export async function getIngestionStatus(ingestionId: string) {
-  return prisma.repositoryIngestion.findUnique({
-    where: { id: ingestionId },
-  });
+export async function getIngestionStatus(ingestionId: string, userId: string) {
+  return findAuthorizedIngestion(ingestionId, userId, prisma);
 }
 
 /**
- * Get ingested files with filtering and pagination
+ * Get authorized ingested files with filtering and pagination
  */
 export async function getIngestedFiles(
-  repositoryId: string,
+  ingestionId: string,
+  userId: string,
   options: {
     page: number;
     limit: number;
@@ -435,49 +469,61 @@ export async function getIngestedFiles(
   const { page, limit, language, isTest, isConfig, isDocumentation } = options;
   const skip = (page - 1) * limit;
 
-  const where: Record<string, unknown> = { repositoryId };
+  return prisma.$transaction(async (tx) => {
+    const ingestion = await findAuthorizedIngestion(ingestionId, userId, tx);
+    if (!ingestion) {
+      throw new NotFoundError('Ingestion', ingestionId);
+    }
 
-  if (language) where.language = language;
-  if (isTest !== undefined) where.isTest = isTest;
-  if (isConfig !== undefined) where.isConfig = isConfig;
-  if (isDocumentation !== undefined) where.isDocumentation = isDocumentation;
-
-  const [files, total] = await Promise.all([
-    prisma.repositoryFile.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { path: 'asc' },
-      select: {
-        id: true,
-        path: true,
-        name: true,
-        extension: true,
-        size: true,
-        language: true,
-        content: true,
-        contentHash: true,
-        isBinary: true,
-        isGenerated: true,
-        isTest: true,
-        isConfig: true,
-        isDocumentation: true,
-        createdAt: true,
-        updatedAt: true,
+    const where: Prisma.RepositoryFileWhereInput = {
+      repositoryId: ingestion.repositoryId,
+      repository: {
+        is: authorizedRepositoryWhere(userId),
       },
-    }),
-    prisma.repositoryFile.count({ where }),
-  ]);
+    };
 
-  return {
-    data: files,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-    },
-  };
+    if (language) where.language = language;
+    if (isTest !== undefined) where.isTest = isTest;
+    if (isConfig !== undefined) where.isConfig = isConfig;
+    if (isDocumentation !== undefined) where.isDocumentation = isDocumentation;
+
+    const [files, total] = await Promise.all([
+      tx.repositoryFile.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { path: 'asc' },
+        select: {
+          id: true,
+          path: true,
+          name: true,
+          extension: true,
+          size: true,
+          language: true,
+          content: true,
+          contentHash: true,
+          isBinary: true,
+          isGenerated: true,
+          isTest: true,
+          isConfig: true,
+          isDocumentation: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+      tx.repositoryFile.count({ where }),
+    ]);
+
+    return {
+      data: files,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  });
 }
 
 /**

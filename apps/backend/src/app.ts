@@ -13,6 +13,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import healthRoutes from './routes/healthRoutes';
 import projectRoutes from './routes/projectRoutes';
 import githubRoutes from './routes/githubRoutes';
+import authRoutes from './routes/authRoutes';
 
 const app = express();
 
@@ -53,6 +54,7 @@ const apiPrefix = config.API_PREFIX;
 app.use('/', healthRoutes);
 
 // API routes
+app.use(`${apiPrefix}/auth`, authRoutes);
 app.use(`${apiPrefix}/projects`, projectRoutes);
 app.use(`${apiPrefix}/github`, githubRoutes);
 

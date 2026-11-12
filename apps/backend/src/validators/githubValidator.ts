@@ -19,13 +19,16 @@ export const initiateOAuthSchema = z.object({
  */
 export const oauthCallbackSchema = z.object({
   query: z.object({
-    code: z.string().min(1, 'Authorization code is required'),
+    code: z.string().min(1, 'Authorization code is required').optional(),
     state: z.string().min(1, 'State parameter is required'),
-    error: z.string().optional(),
+    error: z.string().min(1).optional(),
     error_description: z.string().optional(),
     error_uri: z.string().optional(),
   }),
-});
+}).refine(
+  ({ query }) => Boolean(query.error) || Boolean(query.code),
+  { path: ['query', 'code'], message: 'Authorization code is required unless GitHub returns an OAuth error' }
+);
 
 /**
  * Repository list query schema
@@ -55,8 +58,6 @@ export const repositoryParamsSchema = z.object({
  */
 export const startIngestionSchema = z.object({
   body: z.object({
-    owner: z.string().min(1, 'Owner is required'),
-    repo: z.string().min(1, 'Repository name is required'),
     branch: z.string().optional(),
     projectId: z.string().cuid('Invalid project ID').optional(),
   }),

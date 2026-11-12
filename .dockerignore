@@ -1,0 +1,58 @@
+# Git and local tooling
+.git
+.gitignore
+.claude
+
+# Dependencies
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+
+# Build outputs
+dist
+apps/*/dist
+packages/*/dist
+build
+*.tsbuildinfo
+
+# Environment files
+.env*
+apps/*/.env*
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage
+
+# Prisma
+apps/backend/prisma/dev.db
+apps/backend/prisma/dev.db-journal
+apps/backend/prisma/devhandover.db
+apps/backend/prisma/devhandover.db-journal
+*.db
+*.db-*
+*.db.*
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.*
+
+# Misc
+*.pem
+.vercel
+.netlify

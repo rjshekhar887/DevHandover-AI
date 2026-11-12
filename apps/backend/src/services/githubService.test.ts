@@ -3,12 +3,62 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock config BEFORE importing services - use vi.hoisted to avoid hoisting issues
+const { configMock, prismaMock } = vi.hoisted(() => ({
+  configMock: {
+    GITHUB_CLIENT_ID: 'test-client-id',
+    GITHUB_CLIENT_SECRET: 'test-client-secret',
+    GITHUB_CALLBACK_URL: 'http://localhost:3000/api/v1/github/callback',
+    NODE_ENV: 'test',
+    PORT: 3000,
+    API_PREFIX: '/api/v1',
+    DATABASE_URL: 'file:./test.db',
+    CORS_ORIGIN: 'http://localhost:5173',
+    CORS_CREDENTIALS: true,
+    LLM_PROVIDER: 'openai' as const,
+    LLM_MODEL: 'gpt-4o',
+    JWT_SECRET: 'test-secret',
+    JWT_EXPIRES_IN: '7d',
+    LOG_LEVEL: 'info' as const,
+    TOKEN_ENCRYPTION: {
+      activeKeyId: 'test-key',
+      keys: new Map([['test-key', Buffer.alloc(32, 7)]]),
+    },
+  },
+  prismaMock: {
+    gitHubConnection: {
+      upsert: vi.fn(),
+      delete: vi.fn(),
+    },
+    user: {
+      update: vi.fn(),
+    },
+    $transaction: vi.fn(),
+  },
+}));
+
+vi.mock('../config', () => ({
+  config: configMock,
+  isDevelopment: false,
+  isProduction: false,
+  isTest: true,
+}));
+vi.mock('../prisma/client', () => ({ prisma: prismaMock }));
+vi.mock('../utils/logger', () => ({
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
+
+// Now import services after mock is set up
 import {
   generateOAuthState,
   buildOAuthUrl,
-  encryptToken,
   decryptToken,
+  upsertGitHubConnection,
+  deleteGitHubConnection,
 } from './githubService';
+import { decryptToken as decryptEncryptedToken } from './tokenEncryption';
+import { logger } from '../utils/logger';
 import {
   shouldExcludeFile,
   isTextFile,
@@ -17,34 +67,14 @@ import {
   getLanguageFromPath,
 } from './ingestionService';
 
-// Mock config
-vi.mock('../config', async () => {
-  const actual = await vi.importActual('../config');
-  return {
-    ...actual,
-    config: {
-      GITHUB_CLIENT_ID: 'test-client-id',
-      GITHUB_CLIENT_SECRET: 'test-client-secret',
-      GITHUB_CALLBACK_URL: 'http://localhost:3000/api/v1/github/callback',
-      NODE_ENV: 'test',
-      PORT: 3000,
-      API_PREFIX: '/api/v1',
-      DATABASE_URL: 'file:./test.db',
-      CORS_ORIGIN: 'http://localhost:5173',
-      CORS_CREDENTIALS: true,
-      LLM_PROVIDER: 'openai',
-      LLM_MODEL: 'gpt-4o',
-      JWT_SECRET: 'test-secret',
-      JWT_EXPIRES_IN: '7d',
-      LOG_LEVEL: 'info',
-    },
-    isDevelopment: false,
-    isProduction: false,
-    isTest: true,
-  };
-});
-
 describe('GitHub Service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prismaMock.$transaction.mockImplementation(
+      async (callback: (tx: typeof prismaMock) => Promise<unknown>) => callback(prismaMock)
+    );
+  });
+
   describe('generateOAuthState', () => {
     it('should generate a secure random state', () => {
       const state1 = generateOAuthState();
@@ -70,20 +100,121 @@ describe('GitHub Service', () => {
     });
   });
 
-  describe('encryptToken/decryptToken', () => {
-    it('should encrypt and decrypt tokens correctly', () => {
-      const token = 'gho_test_token_1234567890abcdef';
-      const encrypted = encryptToken(token);
-      const decrypted = decryptToken(encrypted);
+  describe('encrypted token persistence', () => {
+    const userId = 'platform-user-42';
+    const token = 'synthetic-unit-test-token';
+    const githubUser = {
+      id: 123,
+      login: 'test-user',
+      name: 'Test User',
+      email: 'test@example.test',
+      avatar_url: 'https://example.test/avatar.png',
+      html_url: 'https://github.com/test-user',
+    };
 
-      expect(encrypted).not.toBe(token);
-      expect(decrypted).toBe(token);
+    it('persists separately encrypted values with the correct AAD in one transaction', async () => {
+      await upsertGitHubConnection(userId, githubUser, token, 'repo');
+
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      const connectionData = prismaMock.gitHubConnection.upsert.mock.calls[0][0];
+      const userData = prismaMock.user.update.mock.calls[0][0];
+      const connectionEnvelope = connectionData.create.accessToken;
+      const userEnvelope = userData.data.accessToken;
+
+      expect(connectionEnvelope).toMatch(/^gh-token:v2:/);
+      expect(userEnvelope).toMatch(/^gh-token:v2:/);
+      expect(connectionEnvelope).not.toBe(userEnvelope);
+      expect(connectionEnvelope).not.toContain(token);
+      expect(userEnvelope).not.toContain(token);
+      expect(decryptEncryptedToken(connectionEnvelope, configMock.TOKEN_ENCRYPTION, {
+        entity: 'GitHubConnection',
+        userId,
+        field: 'accessToken',
+      })).toBe(token);
+      expect(decryptEncryptedToken(userEnvelope, configMock.TOKEN_ENCRYPTION, {
+        entity: 'User',
+        userId,
+        field: 'accessToken',
+      })).toBe(token);
+      const loggedValues = JSON.stringify([
+        vi.mocked(logger.error).mock.calls,
+        vi.mocked(logger.warn).mock.calls,
+        vi.mocked(logger.info).mock.calls,
+        vi.mocked(logger.debug).mock.calls,
+      ]);
+      expect(loggedValues).not.toContain(token);
+      expect(loggedValues).not.toContain(connectionEnvelope);
+      expect(loggedValues).not.toContain(userEnvelope);
+      expect(loggedValues).not.toContain(configMock.TOKEN_ENCRYPTION.keys.get('test-key')?.toString('base64'));
     });
 
-    it('should handle legacy tokens', () => {
-      const legacyToken = 'not-base64-encoded';
-      const decrypted = decryptToken(legacyToken);
-      expect(decrypted).toBe(legacyToken);
+    it('replaces both encrypted values on reconnection', async () => {
+      await upsertGitHubConnection(userId, githubUser, token, 'repo');
+      await upsertGitHubConnection(userId, githubUser, 'replacement-unit-token', 'repo');
+
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(2);
+      expect(prismaMock.gitHubConnection.upsert.mock.calls[1][0].update.accessToken)
+        .not.toBe(prismaMock.gitHubConnection.upsert.mock.calls[0][0].update.accessToken);
+      expect(prismaMock.user.update.mock.calls[1][0].data.accessToken)
+        .not.toBe(prismaMock.user.update.mock.calls[0][0].data.accessToken);
+    });
+
+    it('propagates either write failure from the encompassing transaction', async () => {
+      prismaMock.user.update.mockRejectedValueOnce(new Error('synthetic write failure'));
+
+      await expect(upsertGitHubConnection(userId, githubUser, token, 'repo'))
+        .rejects.toThrow('Unable to persist GitHub connection securely');
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain(token);
+    });
+
+    it('does not attempt the legacy user write when the connection write fails', async () => {
+      prismaMock.gitHubConnection.upsert.mockRejectedValueOnce(new Error('synthetic connection failure'));
+
+      await expect(upsertGitHubConnection(userId, githubUser, token, 'repo'))
+        .rejects.toThrow('Unable to persist GitHub connection securely');
+      expect(prismaMock.user.update).not.toHaveBeenCalled();
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails closed for missing keys, wrong owners, and malformed envelopes', async () => {
+      await upsertGitHubConnection(userId, githubUser, token, 'repo');
+      const stored = prismaMock.gitHubConnection.upsert.mock.calls.at(-1)![0].create.accessToken;
+
+      expect(() => decryptToken(stored, `${userId}-different`))
+        .toThrow('Unable to access GitHub connection securely');
+      expect(() => decryptToken('not-a-v2-envelope', userId))
+        .toThrow('Unable to access GitHub connection securely');
+      const userEnvelope = prismaMock.user.update.mock.calls.at(-1)![0].data.accessToken;
+      expect(() => decryptToken(userEnvelope, userId))
+        .toThrow('Unable to access GitHub connection securely');
+
+      const encryptionConfig = configMock.TOKEN_ENCRYPTION;
+      try {
+        configMock.TOKEN_ENCRYPTION = undefined as unknown as typeof encryptionConfig;
+        expect(() => decryptToken(stored, userId))
+          .toThrow('GitHub token encryption is not configured');
+      } finally {
+        configMock.TOKEN_ENCRYPTION = encryptionConfig;
+      }
+    });
+
+    it('clears the connection and legacy fields in one transaction', async () => {
+      await deleteGitHubConnection(userId);
+
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      expect(prismaMock.gitHubConnection.delete).toHaveBeenCalledWith({ where: { userId } });
+      expect(prismaMock.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { githubId: null, githubLogin: null, accessToken: null },
+      });
+    });
+
+    it('propagates legacy clearing failure so the disconnect transaction rolls back', async () => {
+      prismaMock.user.update.mockRejectedValueOnce(new Error('synthetic clear failure'));
+
+      await expect(deleteGitHubConnection(userId)).rejects.toThrow('synthetic clear failure');
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 });

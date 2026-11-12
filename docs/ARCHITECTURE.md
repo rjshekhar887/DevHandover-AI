@@ -75,7 +75,7 @@ The GitHub integration follows a service-oriented design:
 
 3. **Security Considerations**:
    - OAuth state parameter with 10-minute expiry
-   - Access tokens encrypted before database storage (base64 encoding - production should use AES-256-GCM)
+   - GitHub token persistence uses versioned AES-256-GCM envelopes with record-specific authenticated context; existing records require a coordinated migration before deploying the strict encrypted read path
    - Tokens never exposed to frontend
    - Rate limit handling with retry logic
    - Input validation on all GitHub API parameters

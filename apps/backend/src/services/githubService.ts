@@ -7,6 +7,11 @@ import { config } from '../config';
 import { prisma } from '../prisma/client';
 import { logger } from '../utils/logger';
 import { UnauthorizedError, BadRequestError, ServiceUnavailableError, InternalServerError } from '../utils/errors';
+import {
+  decryptToken as decryptEncryptedToken,
+  encryptToken as encryptTokenWithAad,
+  type TokenEncryptionContext,
+} from './tokenEncryption';
 
 // Types
 export interface GitHubTokenResponse {
@@ -114,15 +119,14 @@ export async function exchangeCodeForToken(code: string): Promise<GitHubTokenRes
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    logger.error('GitHub token exchange failed', { status: response.status, error });
+    logger.error('GitHub token exchange failed', { status: response.status });
     throw new UnauthorizedError('Failed to exchange authorization code for token');
   }
 
   const data = await response.json() as GitHubTokenResponse;
 
   if (data.error) {
-    logger.error('GitHub OAuth error', { error: data.error, error_description: data.error_description });
+    logger.error('GitHub OAuth error');
     throw new UnauthorizedError(data.error_description || 'GitHub OAuth failed');
   }
 
@@ -180,46 +184,75 @@ export async function upsertGitHubConnection(
   accessToken: string,
   scope: string
 ): Promise<void> {
-  // Encrypt the access token before storing (in production, use proper encryption)
-  const encryptedToken = encryptToken(accessToken);
+  const encryptionConfig = config.TOKEN_ENCRYPTION;
+  if (!encryptionConfig) {
+    throw new InternalServerError('GitHub token encryption is not configured');
+  }
 
-  await prisma.gitHubConnection.upsert({
-    where: { userId },
-    update: {
-      githubId: githubUser.id.toString(),
-      login: githubUser.login,
-      name: githubUser.name,
-      email: githubUser.email,
-      avatarUrl: githubUser.avatar_url,
-      accessToken: encryptedToken,
-      scope,
-      tokenType: 'bearer',
-      connectedAt: new Date(),
-      disconnectedAt: null,
-    },
-    create: {
-      userId,
-      githubId: githubUser.id.toString(),
-      login: githubUser.login,
-      name: githubUser.name,
-      email: githubUser.email,
-      avatarUrl: githubUser.avatar_url,
-      accessToken: encryptedToken,
-      scope,
-      tokenType: 'bearer',
-    },
-  });
+  const connectionContext: TokenEncryptionContext = {
+    entity: 'GitHubConnection',
+    userId,
+    field: 'accessToken',
+  };
+  const userContext: TokenEncryptionContext = {
+    entity: 'User',
+    userId,
+    field: 'accessToken',
+  };
+  let connectionToken: string;
+  let userToken: string;
+  try {
+    connectionToken = encryptTokenWithAad(accessToken, encryptionConfig, connectionContext);
+    userToken = encryptTokenWithAad(accessToken, encryptionConfig, userContext);
+  } catch {
+    throw new InternalServerError('Unable to secure GitHub connection');
+  }
 
-  // Also update the user model with GitHub info (legacy fields)
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      githubId: githubUser.id.toString(),
-      githubLogin: githubUser.login,
-      avatarUrl: githubUser.avatar_url,
-      accessToken: encryptedToken, // Legacy field
-    },
-  });
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.gitHubConnection.upsert({
+        where: { userId },
+        update: {
+          githubId: githubUser.id.toString(),
+          login: githubUser.login,
+          name: githubUser.name,
+          email: githubUser.email,
+          avatarUrl: githubUser.avatar_url,
+          accessToken: connectionToken,
+          scope,
+          tokenType: 'bearer',
+          connectedAt: new Date(),
+          disconnectedAt: null,
+        },
+        create: {
+          userId,
+          githubId: githubUser.id.toString(),
+          login: githubUser.login,
+          name: githubUser.name,
+          email: githubUser.email,
+          avatarUrl: githubUser.avatar_url,
+          accessToken: connectionToken,
+          scope,
+          tokenType: 'bearer',
+        },
+      });
+
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          githubId: githubUser.id.toString(),
+          githubLogin: githubUser.login,
+          avatarUrl: githubUser.avatar_url,
+          accessToken: userToken,
+        },
+      });
+    });
+  } catch (error) {
+    logger.error('GitHub connection persistence failed', {
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
+    throw new InternalServerError('Unable to persist GitHub connection securely');
+  }
 }
 
 /**
@@ -235,53 +268,40 @@ export async function getGitHubConnection(userId: string) {
  * Delete GitHub connection for a user
  */
 export async function deleteGitHubConnection(userId: string): Promise<void> {
-  await prisma.gitHubConnection.delete({
-    where: { userId },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.gitHubConnection.delete({
+      where: { userId },
+    });
 
-  // Clear legacy fields
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      githubId: null,
-      githubLogin: null,
-      accessToken: null,
-    },
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        githubId: null,
+        githubLogin: null,
+        accessToken: null,
+      },
+    });
   });
 }
 
 /**
- * Decrypt stored access token
+ * Decrypt a stored GitHub connection token using its owning platform user ID.
  */
-export function decryptToken(encryptedToken: string): string {
-  // In production, use proper encryption/decryption
-  // For now, we use a simple encoding (NOT secure for production)
-  // Check if it's valid base64 first
-  if (!isValidBase64(encryptedToken)) {
-    return encryptedToken; // Fallback for legacy tokens
+export function decryptToken(encryptedToken: string, userId: string): string {
+  const encryptionConfig = config.TOKEN_ENCRYPTION;
+  if (!encryptionConfig) {
+    throw new InternalServerError('GitHub token encryption is not configured');
   }
-  try {
-    return Buffer.from(encryptedToken, 'base64').toString('utf-8');
-  } catch {
-    return encryptedToken; // Fallback for legacy tokens
-  }
-}
 
-function isValidBase64(str: string): boolean {
   try {
-    return Buffer.from(str, 'base64').toString('base64') === str;
+    return decryptEncryptedToken(encryptedToken, encryptionConfig, {
+      entity: 'GitHubConnection',
+      userId,
+      field: 'accessToken',
+    });
   } catch {
-    return false;
+    throw new InternalServerError('Unable to access GitHub connection securely');
   }
-}
-
-/**
- * Encrypt access token for storage
- */
-export function encryptToken(token: string): string {
-  // In production, use proper encryption (e.g., AES-256-GCM)
-  // For now, we use a simple encoding (NOT secure for production)
-  return Buffer.from(token).toString('base64');
 }
 
 /**

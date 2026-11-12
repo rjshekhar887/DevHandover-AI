@@ -17,9 +17,9 @@ import {
   getIngestionFiles,
 } from '../controllers/githubController';
 import { validate } from '../middleware/validation';
+import { requireAuth } from '../middleware/auth';
 import {
   initiateOAuthSchema,
-  oauthCallbackSchema,
   listRepositoriesSchema,
   repositoryParamsSchema,
   startIngestionSchema,
@@ -32,10 +32,11 @@ const router = Router();
 /**
  * @route GET /api/v1/github/auth
  * @description Initiate GitHub OAuth flow
- * @access Public (will be protected by auth middleware in future)
+ * @access Private (authenticated application user)
  */
 router.get(
   '/auth',
+  requireAuth,
   validate(initiateOAuthSchema),
   initiateOAuth
 );
@@ -43,13 +44,15 @@ router.get(
 /**
  * @route GET /api/v1/github/callback
  * @description Handle GitHub OAuth callback
- * @access Public
+ * @access Public (OAuth state and browser binding required)
  */
 router.get(
   '/callback',
-  validate(oauthCallbackSchema),
   handleOAuthCallback
 );
+
+// All GitHub account and repository operations require an application session.
+router.use(requireAuth);
 
 /**
  * @route GET /api/v1/github/connection

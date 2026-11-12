@@ -1,0 +1,50 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      API_PREFIX: /api/v1
+      DATABASE_URL: file:/app/data/devhandover.db
+      CORS_ORIGIN: http://localhost
+      CORS_CREDENTIALS: "true"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in your environment}
+      JWT_EXPIRES_IN: 7d
+      LOG_LEVEL: info
+      DEMO_MODE: ${DEMO_MODE:-true}
+      DEMO_USER_EMAIL: ${DEMO_USER_EMAIL:-demo@devhandover.ai}
+      GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID: ${GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID:?Set GITHUB_TOKEN_ENCRYPTION_ACTIVE_KEY_ID in your environment}
+      GITHUB_TOKEN_ENCRYPTION_KEYS: ${GITHUB_TOKEN_ENCRYPTION_KEYS:?Set GITHUB_TOKEN_ENCRYPTION_KEYS in your environment}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-http://localhost/api/v1/github/callback}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+    volumes:
+      - backend_sqlite:/app/data
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend_sqlite:

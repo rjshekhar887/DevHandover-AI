@@ -438,7 +438,7 @@ Breaking changes will result in a new version (`/api/v2/`).
 
 #### GET /api/v1/github/auth
 
-Initiate GitHub OAuth flow.
+Initiate GitHub OAuth flow. Requires a valid application bearer token. The response also sets a short-lived, HttpOnly browser-binding cookie scoped to `/api/v1/github/callback`; the browser must retain it through the GitHub redirect.
 
 **Query Parameters**
 
@@ -459,13 +459,13 @@ Initiate GitHub OAuth flow.
 
 #### GET /api/v1/github/callback
 
-Handle GitHub OAuth callback. This endpoint is called by GitHub after user authorization.
+Handle GitHub OAuth callback. This endpoint is called by GitHub after user authorization. The callback must include the same browser-binding cookie set by OAuth initiation. OAuth state and the cookie binding expire after 10 minutes and can be consumed only once; the cookie is cleared on callback processing.
 
 **Query Parameters**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `code` | string | Yes | Authorization code from GitHub |
+| `code` | string | Conditional | Authorization code from GitHub; required unless GitHub returns `error` |
 | `state` | string | Yes | OAuth state parameter for CSRF protection |
 | `error` | string | No | Error code if user denied authorization |
 | `error_description` | string | No | Human-readable error description |

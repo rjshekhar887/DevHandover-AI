@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { generateOAuthState, buildOAuthUrl, encryptToken, decryptToken } from './githubService';
+import { generateOAuthState, buildOAuthUrl } from './githubService';
 
 // Mock config before importing
 vi.mock('../config', () => ({
@@ -72,29 +72,6 @@ describe('GitHub OAuth Service', () => {
       expect(urlObj.searchParams.get('scope')).toBe('repo read:user user:email');
       expect(urlObj.searchParams.get('state')).toBe(state);
       expect(urlObj.searchParams.get('allow_signup')).toBe('true');
-    });
-  });
-
-  describe('encryptToken/decryptToken', () => {
-    it('should encrypt and decrypt tokens correctly', () => {
-      const token = 'gho_test_token_1234567890abcdef';
-      const encrypted = encryptToken(token);
-      const decrypted = decryptToken(encrypted);
-
-      expect(encrypted).not.toBe(token);
-      expect(decrypted).toBe(token);
-    });
-
-    it('should handle legacy tokens', () => {
-      const legacyToken = 'not-base64-encoded';
-      const decrypted = decryptToken(legacyToken);
-      expect(decrypted).toBe(legacyToken);
-    });
-
-    it('should handle empty string', () => {
-      const encrypted = encryptToken('');
-      const decrypted = decryptToken(encrypted);
-      expect(decrypted).toBe('');
     });
   });
 });
